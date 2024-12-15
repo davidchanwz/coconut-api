@@ -3,16 +3,28 @@
 import spacy
 from spacy.pipeline import EntityRuler
 
+import spacy
+from spacy.pipeline import EntityRuler
+
 def add_entity_ruler(nlp):
-    ruler = EntityRuler(nlp, overwrite_ents=True)
-    
-    patterns = [
-        {"label": "PRODUCT", "pattern": [{"LOWER": "chicken"}, {"LOWER": "rice"}]},
-        {"label": "PRODUCT", "pattern": [{"LOWER": "fries"}]},
-        {"label": "PRODUCT", "pattern": [{"LOWER": "drink"}]},
-        # Add more product patterns as needed
+
+    ruler = nlp.add_pipe("entity_ruler", before="ner", name="custom_entity_ruler")
+    # Custom patterns for identification
+    product_patterns = [
+        {"label": "PRODUCT", "pattern": [{"IS_ALPHA": True}, {"IS_ALPHA": True}]},
+        {"label": "PRODUCT", "pattern": [{"IS_ALPHA": True}]},
     ]
     
-    ruler.add_patterns(patterns)
-    nlp.add_pipe("entity_ruler", before="ner")
+    price_patterns = [
+        {"label": "MONEY", "pattern": [{"TEXT": {"REGEX": r"^\d+[.,]\d{2}$"}}]},
+        {"label": "MONEY", "pattern": [{"LIKE_NUM": True}, {"TEXT": {"REGEX": r"[.,]\d{2}$"}}]}
+    ]
+    
+    # Combine all patterns
+    all_patterns = product_patterns + price_patterns
+    
+    # Add patterns to the EntityRuler
+    ruler.add_patterns(all_patterns)
+
+
     return nlp
