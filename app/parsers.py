@@ -5,7 +5,12 @@ from typing import List, Dict
 from app.nlp.entity_ruler import add_entity_ruler
 
 # Initialize SpaCy NLP model with custom Entity Ruler
-nlp = spacy.load("en_core_web_sm")
+
+# Load the NLP model directly as an installed package
+try:
+    nlp = spacy.load("en_core_web_sm")
+except Exception as e:
+    raise ValueError(f"Could not load SpaCy model 'en_core_web_sm'. Error: {e}")
 nlp = add_entity_ruler(nlp)
 
 def parse_receipt_text(text: str) -> List[Dict[str, float]]:
