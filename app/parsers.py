@@ -3,6 +3,7 @@
 import spacy
 from typing import List, Dict
 import re
+import logging
 from app.nlp.entity_ruler import add_entity_ruler
 
 # Initialize SpaCy NLP model with custom Entity Ruler
