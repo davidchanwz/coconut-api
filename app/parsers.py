@@ -7,7 +7,6 @@ from app.nlp.entity_ruler import add_entity_ruler
 
 # Initialize SpaCy NLP model with custom Entity Ruler
 
-# Load the NLP model directly as an installed package
 try:
     nlp = spacy.load("en_core_web_sm", exclude=["lemmatizer", "tagger", "morphologizer"])
 except Exception as e:
@@ -52,52 +51,137 @@ def parse_receipt_text(text: str) -> List[Dict[str, float]]:
     # Debug named entities
     debug_named_entities(doc)
     
-    entities = list(doc.ents)
-    print("Entities found:", [(ent.text, ent.label_) for ent in entities])
+    # Extract entities with labels PRODUCT and MONEY
+    products = [ent for ent in doc.ents if ent.label_ == "PRODUCT"]
+    money = [ent for ent in doc.ents if ent.label_ == "MONEY"]
     
-    for i, ent in enumerate(entities):
-        if ent.label_ == "PRODUCT":
-            # Initialize price as None
-            price = None
-            # Iterate over the subsequent entities to find the next PRICE/MONEY/CARDINAL
-            for next_ent in entities[i+1:]:
-                if next_ent.label_ in ["MONEY", "PRICE", "CARDINAL"]:
-                    price_str = next_ent.text.replace(',', '.').replace('$', '').strip()
-                    try:
-                        price = float(price_str)
-                        print(f"Pairing Product: {ent.text} with Price: {price}")
-                        break
-                    except ValueError:
-                        print(f"Failed to convert price: {next_ent.text}")
-                        continue
-            if price is not None:
-                items.append({"item": ent.text, "amount": price})
-            else:
-                print(f"No price found for product: {ent.text}")
+    # Convert MONEY entities to float amounts
+    money_amounts = []
+    for ent in money:
+        price_str = ent.text.replace(',', '.').replace('$', '').replace('€', '').replace('¥', '').strip()
+        try:
+            amount = float(price_str)
+            money_amounts.append(amount)
+        except ValueError:
+            continue
     
-    # Fallback: If some products are missing prices, attempt to extract prices via regex
-    products_detected = len([ent for ent in entities if ent.label_ == "PRODUCT"])
-    prices_detected = len(items)
-    if prices_detected < products_detected:
-        # Extract prices via regex
-        regex_prices = extract_prices_with_regex(text)
-        print(f"Regex extracted prices: {regex_prices}")
-        # Find products without prices
-        products = [ent.text for ent in entities if ent.label_ == "PRODUCT"]
-        paired_prices = [item['amount'] for item in items]
-        remaining_prices = [p for p in regex_prices if p not in paired_prices]
-        for product, price in zip(products[prices_detected:], remaining_prices):
-            print(f"Falling back to regex pairing Product: {product} with Price: {price}")
-            items.append({"item": product, "amount": price})
+    # Line-by-line parsing to maintain context
+    lines = text.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue  # Skip empty lines
+        
+        # Exclude lines that are not items
+        if is_excluded_line(line):
+            logging.debug(f"Excluded line: {line}")
+            continue
+        
+        # Attempt to extract item and price from the same line
+        match = extract_item_price(line)
+        if match:
+            item_name, item_price = match
+            if item_price <= 0:
+                logging.debug(f"Skipped invalid amount in line: {line}")
+                continue
+            items.append({"item": item_name, "amount": item_price})
+            logging.debug(f"Matched line: {line} -> Item: {item_name}, Amount: {item_price}")
+        else:
+            logging.debug(f"No pattern matched for line: {line}")
+            continue
     
+    # Additional verification to ensure items are correctly parsed
     if not items:
-        print("No items found after parsing.")
-        raise ValueError("No items found in receipt.")
+        # Attempt to extract using fallback regex if no items are found
+        regex_prices = extract_prices_with_regex(text)
+        logging.debug(f"Fallback regex extracted prices: {regex_prices}")
+        # Depending on your strategy, you might want to handle this differently
+        # For now, raise an exception
+        raise ValueError("No valid items with positive amounts were found.")
     
-    print(f"Parsed items: {items}")
     return items
 
+def is_excluded_line(line: str) -> bool:
+    """
+    Determines if a line should be excluded from item extraction based on predefined patterns.
+    
+    Args:
+        line (str): A single line of text from the receipt.
+    
+    Returns:
+        bool: True if the line should be excluded, False otherwise.
+    """
+    exclude_patterns = [
+        r'(?i)\bsubtotal\b',
+        r'(?i)\btax\b',
+        r'(?i)\btotal\b',
+        r'(?i)\bchange\b',
+        r'(?i)\brefund\b',
+        r'(?i)\bdiscount\b',
+        r'(?i)\bthank you\b',
+        r'(?i)\bpurchase date\b',
+        r'(?i)\bdate\b',
+        r'(?i)\bbalance due\b',
+        r'(?i)\bguests\b',
+        r'(?i)\bpax\b',
+        r'(?i)\breprint\b',
+        r'(?i)\bserver\b',
+        r'(?i)\bservice charge\b',
+        r'(?i)\bfees\b',
+        r'(?i)\bgst\b',
+    ]
+    
+    for pattern in exclude_patterns:
+        if re.search(pattern, line):
+            return True
+    return False
+
+def extract_item_price(line: str):
+    """
+    Extracts the item name and price from a single line using regex patterns.
+    
+    Args:
+        line (str): A single line of text from the receipt.
+    
+    Returns:
+        tuple or None: Returns a tuple (item_name, amount) if a pattern matches, else None.
+    """
+    # Define multiple regex patterns to handle different receipt formats
+    patterns = [
+        # Pattern 1: "Item Name    123.45" or "Item Name 123.45"
+        r'^([^\d]+?)\s+(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)$',
+        # Pattern 2: "Item Name ..... 123.45"
+        r'^([^\d]+?)\.{3,}\s+(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)$',
+        # Pattern 3: "Item Name - 123.45"
+        r'^([^\d]+?)\s*-\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)$',
+        # Pattern 4: "Item Name x2 123.45" (handling quantities)
+        r'^([^\d]+?)\s*x\d+\s+(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)$',
+        # Pattern 5: "Item Name 2 @ 61.72 each = 123.44"
+        r'^([^\d]+?)\s+\d+\s*@\s*\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?\s*(?:each)?\s*=\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)$'
+    ]
+    
+    for pattern in patterns:
+        match = re.match(pattern, line)
+        if match:
+            item_name, item_price = match.groups()
+            # Clean item name: remove trailing dots, hyphens, and extra spaces
+            item_name = re.sub(r'[.\-]+$', '', item_name).strip()
+            # Normalize price by replacing comma with dot
+            item_price = item_price.replace(',', '.')
+            try:
+                amount = float(item_price)
+                return item_name, amount
+            except ValueError:
+                return None
+    return None
+
 def debug_named_entities(doc):
+    """
+    Prints the named entities for debugging purposes.
+    
+    Args:
+        doc (Doc): A spaCy Doc object.
+    """
     print("\n=== DEBUG: Named Entities ===")
     for ent in doc.ents:
         print(f"Text: {ent.text}, Label: {ent.label_}")
